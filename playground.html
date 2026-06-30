@@ -349,38 +349,187 @@
         const cy = canvas.height / 2;
 
         // 核心呼吸波形：通过物理计算的当前频率 currentFreq 动态改变发光半正弦波
+<script>
+    const canvas = document.getElementById('playgroundCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 交互状态定义
+    const STATES = {
+        LISTENING: { user: '（用户正在说话）', ai: '正在聆听', color: {r: 30, g: 144, b: 255} }, // 经典蓝
+        EVALUATING: { user: '（用户停顿中...）', ai: '正在评估...', color: {r: 255, g: 190, b: 0} }, // 暖黄
+        YIELDING: { user: '（用户继续说话）', ai: '继续聆听', color: {r: 30, g: 144, b: 255} }, // 回弹蓝
+        RESPONDING: { user: '（AI应答中）', ai: '好的，我明白了', color: {r: 0, g: 230, b: 118} } // 稳定绿
+    };
+
+    let currentState = 'LISTENING';
+    let lastState = 'LISTENING';
+    let evalTime = 0; // 记录评估状态持续时间
+
+    // 弹簧-阻尼物理引擎核心变量
+    let mass = 1.0;
+    
+    // 物理变量1: 缩放/强度弹性 (x)
+    let x = 1.0; 
+    let targetX = 1.0;
+    let vX = 0.0;
+
+    // 物理变量2: 旋转速度/频率弹性
+    let currentFreq = 0.5;
+    let targetFreq = 0.5;
+    let vFreq = 0.0;
+
+    // 物理变量3: 颜色渐变弹性 (RGB 归一化在 0.0 - 1.0 区间计算，彻底消除数值爆炸)
+    let currentRGB_norm = {r: 30/255, g: 144/255, b: 255/255};
+    let vR = 0.0, vG = 0.0, vB = 0.0;
+
+    // 漩涡粒子系统初始化
+    const particles = [];
+    const PARTICLE_COUNT = 80;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particles.push({
+            angle: Math.random() * Math.PI * 2,
+            distance: Math.random() * 80 + 20,
+            size: Math.random() * 2 + 1,
+            speedOffset: Math.random() * 0.5 + 0.8
+        });
+    }
+
+    // 触发状态切换与物理突变
+    function switchState(stateName) {
+        lastState = currentState;
+        currentState = stateName;
+        evalTime = 0; // 重置评估计时器
+
+        // 更新激活按钮样式
+        document.querySelectorAll('.button-group button').forEach(btn => btn.classList.remove('active'));
+        if(stateName === 'LISTENING') document.getElementById('btnListen').classList.add('active');
+        if(stateName === 'EVALUATING') document.getElementById('btnEval').classList.add('active');
+        if(stateName === 'YIELDING') document.getElementById('btnYield').classList.add('active');
+        if(stateName === 'RESPONDING') document.getElementById('btnRespond').classList.add('active');
+
+        // 同步文字内容
+        document.getElementById('userText').innerText = STATES[stateName].user;
+        document.getElementById('aiText').innerText = STATES[stateName].ai;
+
+        // 物理突变设计 (Overshoot Impulse)
+        if (stateName === 'RESPONDING') {
+            vX = 0.8; // 应答时产生一个突然提亮放大的脉冲 (Impact)
+            targetX = 1.2;
+        } else if (stateName === 'YIELDING') {
+            vX = -0.4; // 让步时触发一次向下轻微收缩的回弹力
+            targetX = 1.0;
+        } else {
+            targetX = 1.0;
+        }
+    }
+
+    // 实时更新滑块数值显示
+    function updateSliders() {
+        document.getElementById('valIntimacy').innerText = document.getElementById('slideIntimacy').value;
+        document.getElementById('valUrgency').innerText = document.getElementById('slideUrgency').value;
+    }
+
+    // 核心物理引擎计算与渲染循环 (基于物理求解器)
+    function physicsLoop() {
+        // 1. 获取滑块参数并计算 Damping c 与 Stiffness k
+        const intimacy = parseFloat(document.getElementById('slideIntimacy').value);
+        const urgency = parseFloat(document.getElementById('slideUrgency').value);
+
+        // 核心公式：Damping = Intimacy * (1 - Urgency)
+        let damping = 0.05 + intimacy * (1.0 - urgency) * 0.35; 
+        let stiffness = 0.05 + (urgency * 0.2) + (1.0 - damping) * 0.15;
+
+        // 2. 根据状态设定目标频率 (Target Frequency)
+        if (currentState === 'LISTENING' || currentState === 'YIELDING') {
+            targetFreq = 0.4; 
+        } else if (currentState === 'EVALUATING') {
+            evalTime += 0.016; 
+            targetFreq = 0.4 + Math.min(evalTime * 1.8, 3.5); 
+        } else if (currentState === 'RESPONDING') {
+            targetFreq = 0.0; 
+        }
+
+        // 3. 采用子步迭代（Substepping）算法，使用微小的 dt 保证物理求解绝对稳定
+        const SUBSTEPS = 4;
+        const dt = 0.05; // 极小的步长，消除数值发散引起的“抽风”
+
+        for (let step = 0; step < SUBSTEPS; step++) {
+            // A. 求解大小缩放 x
+            let forceX = -stiffness * (x - targetX) - damping * vX;
+            vX += (forceX / mass) * dt;
+            x += vX * dt;
+
+            // B. 求解频率过渡 Freq (限制下限，防止出现负频率)
+            let forceFreq = -stiffness * (currentFreq - targetFreq) - damping * vFreq;
+            vFreq += (forceFreq / mass) * dt;
+            currentFreq += vFreq * dt;
+            if (currentFreq < 0) currentFreq = 0;
+
+            // C. 求解色彩平滑渐变 RGB (归一化计算)
+            let targetColor = STATES[currentState].color;
+            let targetR_norm = targetColor.r / 255.0;
+            let targetG_norm = targetColor.g / 255.0;
+            let targetB_norm = targetColor.b / 255.0;
+
+            let forceR = -stiffness * (currentRGB_norm.r - targetR_norm) - damping * vR;
+            vR += (forceR / mass) * dt;
+            currentRGB_norm.r += vR * dt;
+
+            let forceG = -stiffness * (currentRGB_norm.g - targetG_norm) - damping * vG;
+            vG += (forceG / mass) * dt;
+            currentRGB_norm.g += vG * dt;
+
+            let forceB = -stiffness * (currentRGB_norm.b - targetB_norm) - damping * vB;
+            vB += (forceB / mass) * dt;
+            currentRGB_norm.b += vB * dt;
+
+            // 归一化数值截断保护 (Clamp)
+            currentRGB_norm.r = Math.max(0, Math.min(1, currentRGB_norm.r));
+            currentRGB_norm.g = Math.max(0, Math.min(1, currentRGB_norm.g));
+            currentRGB_norm.b = Math.max(0, Math.min(1, currentRGB_norm.b));
+        }
+
+        // 4. 开始画面绘制
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+
+        // 核心呼吸波形：使用稳定的 currentFreq
         let breath = 0.8;
         if (currentState !== 'RESPONDING') {
             breath = 0.85 + Math.sin(Date.now() * 0.002 * currentFreq) * 0.15;
         }
 
         const renderRadius = 75 * x * breath;
-        const colorStr = `rgb(${Math.round(currentRGB.r)}, ${Math.round(currentRGB.g)}, ${Math.round(currentRGB.b)})`;
+        
+        // 将归一化颜色还原为 0-255 整数进行渲染
+        const r = Math.round(currentRGB_norm.r * 255);
+        const g = Math.round(currentRGB_norm.g * 255);
+        const b = Math.round(currentRGB_norm.b * 255);
+        const colorStr = `rgb(${r}, ${g}, ${b})`;
 
-        // A. 绘制底层发光晕 (Glow Filter)
+        // A. 绘制底层发光子
         ctx.shadowBlur = 40 * x * breath;
         ctx.shadowColor = colorStr;
         ctx.fillStyle = colorStr;
         ctx.beginPath();
         ctx.arc(cx, cy, renderRadius, 0, Math.PI * 2);
         ctx.fill();
-        ctx.shadowBlur = 0; // 重置发光防污染
+        ctx.shadowBlur = 0; // 重置
 
         // B. 绘制半透明柔和核心
-        ctx.fillStyle = `rgba(${Math.round(currentRGB.r)}, ${Math.round(currentRGB.g)}, ${Math.round(currentRGB.b)}, 0.4)`;
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.4)`;
         ctx.beginPath();
         ctx.arc(cx, cy, renderRadius * 1.1, 0, Math.PI * 2);
         ctx.fill();
 
-        // C. 渲染旋转的漩涡粒子 (展现 v20 的涌现细节)
-        // 粒子旋转速度与当前频率 currentFreq 正相关
+        // C. 渲染旋转的漩涡粒子
         let rotSpeed = currentFreq * 0.05;
-        if (currentState === 'RESPONDING') rotSpeed = 0.01; // 应答后微弱平移
+        if (currentState === 'RESPONDING') rotSpeed = 0.01;
 
         particles.forEach(p => {
             p.angle += rotSpeed * p.speedOffset;
             
-            // 评估阶段粒子不仅转得快，还会产生轻微向心收缩感
             let currentDist = p.distance * x * breath;
             if (currentState === 'EVALUATING') {
                 currentDist = p.distance * (1.0 - Math.min(evalTime * 0.05, 0.3)) * x * breath;
@@ -405,7 +554,7 @@
 
     // 启动物理引擎
     physicsLoop();
-</script>
+                </script>
 
 </body>
                                         </html>
