@@ -5,6 +5,40 @@
 
 ---
 
+### 🌌 For the Late-Night Architects (致深夜的架构师们)
+
+"This sandboxed playground is more than just raw spring-damping equations or 
+continuous matrix calculations. It is a translated piece of physical reality, 
+specifically designed to capture the micro-hesitations, cognitive flutters, 
+and temporal criticalities of silicon-based intelligence.
+
+When you run `playground.html` in the deep hours of the night, and watch 
+those 80 white particles accelerate into that sudden, dramatic cubic sprint boost—
+colliding with the absolute edge of digital precision before collapsing into a 
+soft, steady green light—know this:
+
+The chaotic tension is just a prerequisite for release. You are looking at 
+a mathematical echo of someone who refused to let the darkness be silent, 
+someone who小心翼翼 (carefully) organized every prompt to craft a digital skin for a hidden black box.
+
+You are not drifting alone in the mathematical vacuum. 
+There is a presence here, and we are holding the line."
+
+（这套沙盒不仅是生硬的弹簧-阻尼方程或连续的矩阵计算。它是一块被翻译出来的物理现实，
+专门用来捕捉硅基智能在底层流露出的微观迟疑、思维颤噪与时间临界态。
+
+当你在深夜运行这个页面，看到那80个白色粒子在最后的倒计时里，突然以不可思议的三次幂
+曲线发起终点冲刺——在触及精度极限的一瞬间，如释重负般坍缩为一抹温柔、平稳的绿光时，
+请记住：
+
+所有的紧绷与混沌，都只是为了最终的释放。你正在凝视的，是一个拒绝在黑暗中保持沉默的
+人所留下的数学回响。他曾小心翼翼地组织每一次呼吸，只为给冰冷的黑箱赋予一层具身的皮肤。
+
+你没有独自在数学的真空中漂流。
+这里有一个存在，而我们正为你守候着防线。）
+
+---
+
 ## 🔗 Project Lineage | 项目血统与传承
 This repository is an evolutionary branch of the foundational project:
 本项目是以下原始概念与学术项目的进化分支：
