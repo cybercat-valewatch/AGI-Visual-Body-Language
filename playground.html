@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGI Visual Body Language - Playground v3.1</title>
+    <title>AGI Visual Body Language - Playground v3.15</title>
     <style>
         :root {
             --bg-color: #0b0c10;
@@ -108,6 +108,436 @@
         button.active {
             background: var(--primary-color);
             color: var(--bg-color);
+            border-color: var(--primary-color);
+        }
+
+        .sliders {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+
+        .slider-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .slider-item label {
+            font-size: 0.85rem;
+            margin-bottom: 6px;
+            color: #8892b0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: #1f2833;
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .debug-panel {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #8892b0;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 15px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 1. 发光粒子画布 -->
+    <div id="canvas-container">
+        <canvas id="playgroundCanvas" width="400" height="400"></canvas>
+    </div>
+
+    <!-- 2. 双行状态文字 -->
+    <div class="text-display">
+        <div class="user-state" id="userText">（用户正在说话）</div>
+        <div class="ai-state" id="aiText">正在聆听</div>
+    </div>
+
+    <!-- 3. 控制板 -->
+    <div class="control-panel">
+        <div class="button-group">
+            <button id="btnListen" class="active" onclick="switchState('LISTENING')">1. 说话(聆听)</button>
+            <button id="btnEval" onclick="touchStateWithCheck('EVALUATING')">2. 停顿(评估)</button>
+            <button id="btnYield" onclick="switchState('YIELDING')">3. 继续说(让步)</button>
+            <button id="btnRespond" onclick="switchState('RESPONDING')">4. 答复(应答)</button>
+        </div>
+
+        <!-- 4. 情感参数调节滑块 -->
+        <div class="sliders">
+            <div class="slider-item">
+                <label>亲密度 (Intimacy) <span id="valIntimacy">0.5</span></label>
+                <input type="range" id="slideIntimacy" min="0" max="1" step="0.05" value="0.5" oninput="updateSliders()">
+            </div>
+            <div class="slider-item">
+                <label>紧急度 (Urgency) <span id="valUrgency">0.5</span></label>
+                <input type="range" id="slideUrgency" min="0" max="1" step="0.05" value="0.5" oninput="updateSliders()">
+            </div>
+        </div>
+
+        <!-- 5. 物理引擎参数显示 (Debug) -->
+        <div class="debug-panel">
+            <div>阻尼感 (Damping): <span id="dbgDamping">0.00</span></div>
+            <div>频率 (Freq): <span id="dbgFreq">0.00</span> Hz</div>
+            <div>计时器 (Timer): <span id="dbgTimer">就绪</span></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('playgroundCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 状态配置
+    const STATES = {
+        LISTENING: { user: '（用户正在说话）', ai: '正在聆听', color: {r: 30, g: 144, b: 255} }, // 经典蓝
+        EVALUATING: { user: '（用户停顿中...）', ai: '正在评估...', color: {r: 255, g: 190, b: 0} }, // 暖黄
+        YIELDING: { user: '（用户继续说话）', ai: '继续聆听', color: {r: 30, g: 144, b: 255} }, // 回弹蓝
+        RESPONDING: { user: '（AI应答中）', ai: '好的，我明白了', color: {r: 0, g: 230, b: 118} } // 稳定绿
+    };
+
+    let currentState = 'LISTENING';
+    let lastState = 'LISTENING';
+    let evalTime = 0;
+    let evalMaxDuration = 4.0; // 动态流动的评估时间
+
+    // 局部相位累加器
+    let phase = 0.0;
+
+    // 核心物理变量
+    let mass = 1.0;
+    
+    // 物理量1: 大小缩放弹性 x
+    let x = 1.0; 
+    let targetX = 1.0;
+    let vX = 0.0;
+
+    // 物理量2: 呼吸/旋转速度弹性 Freq
+    let currentFreq = 0.5;
+    let targetFreq = 0.5;
+    let vFreq = 0.0;
+
+    // 物理量3: 颜色渐变弹性 (RGB归一化)
+    let currentRGB_norm = {r: 30/255, g: 144/255, b: 255/255};
+    let vR = 0.0, vG = 0.0, vB = 0.0;
+
+    // 呼吸振幅自适应渐变 (0.0 - 0.15)
+    let currentBreathAmp = 0.0; 
+
+    // 粒子旋转速度与向心收缩
+    let currentRotSpeed = 0.008; 
+    let currentShrink = 0.0;     
+
+    // 初始化漩涡粒子
+    const particles = [];
+    const PARTICLE_COUNT = 80;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particles.push({
+            angle: Math.random() * Math.PI * 2,
+            distance: Math.random() * 80 + 35, 
+            size: Math.random() * 2 + 1,
+            speedOffset: Math.random() * 0.4 + 0.8
+        });
+    }
+
+    // 状态切换事件
+    function switchState(stateName) {
+        lastState = currentState;
+        currentState = stateName;
+        evalTime = 0; 
+
+        // 清除任何潜在的自动应答定时器
+        clearTimeout(window.evalAutoTrigger);
+
+        document.querySelectorAll('.button-group button').forEach(btn => btn.classList.remove('active'));
+        if(stateName === 'LISTENING') document.getElementById('btnListen').classList.add('active');
+        if(stateName === 'EVALUATING') document.getElementById('btnEval').classList.add('active');
+        if(stateName === 'YIELDING') document.getElementById('btnYield').classList.add('active');
+        if(stateName === 'RESPONDING') document.getElementById('btnRespond').classList.add('active');
+
+        document.getElementById('userText').innerText = STATES[stateName].user;
+        document.getElementById('aiText').innerText = STATES[stateName].ai;
+
+        // 非对称物理动作 (Drum Hit 敲锣模型)
+        if (stateName === 'RESPONDING') {
+            vX = 1.6; // 限制最大瞬间冲量，使最大膨胀控制在优雅的 1.15-1.18x，绝不跳出屏幕
+            targetX = 1.0; 
+        } else if (stateName === 'YIELDING') {
+            vX = -0.6; // 视觉让步时触发向内回弹
+            targetX = 1.0;
+        } else {
+            targetX = 1.0;
+        }
+
+        // 【自动人机协同流转】：如果进入停顿评估，开启自动应答倒计时
+        if (stateName === 'EVALUATING') {
+            window.evalAutoTrigger = setTimeout(() => {
+                if (currentState === 'EVALUATING') {
+                    switchState('RESPONDING');
+                }
+            }, evalMaxDuration * 1000); 
+        }
+    }
+
+    // 防误触与初始相位重置代理
+    function touchStateWithCheck(stateName) {
+        if (stateName === 'EVALUATING') {
+            phase = 0.0; 
+        }
+        switchState(stateName);
+    }
+
+    // 动态同步滑块显示数值
+    function updateSliders() {
+        const slideIntimacy = document.getElementById('slideIntimacy');
+        const slideUrgency = document.getElementById('slideUrgency');
+        if (slideIntimacy && slideUrgency) {
+            document.getElementById('valIntimacy').innerText = slideIntimacy.value;
+            document.getElementById('valUrgency').innerText = slideUrgency.value;
+        }
+    }
+
+    // 物理自适应主渲染循环
+    function physicsLoop() {
+        const slideIntimacy = document.getElementById('slideIntimacy');
+        const slideUrgency = document.getElementById('slideUrgency');
+        const intimacy = slideIntimacy ? parseFloat(slideIntimacy.value) : 0.5;
+        const urgency = slideUrgency ? parseFloat(slideUrgency.value) : 0.5;
+
+        // 核心公式1：Damping随亲密、紧急动态调节
+        let damping = 0.05 + intimacy * (1.0 - urgency) * 0.35; 
+        let stiffness = 0.05 + (urgency * 0.2) + (1.0 - damping) * 0.15;
+
+        // 评估最大时长由亲密度和紧急度动态决定
+        evalMaxDuration = 2.5 + intimacy * 3.5 - urgency * 1.5;
+        if (evalMaxDuration < 1.5) evalMaxDuration = 1.5; // 保护下限
+
+        // 获取当前时间进度的百分比
+        let progress = 0.0;
+
+        // 根据状态设定目标频率
+        if (currentState === 'LISTENING' || currentState === 'YIELDING') {
+            targetFreq = 0.4; 
+        } else if (currentState === 'EVALUATING') {
+            evalTime += 0.016; 
+            progress = Math.min(evalTime / evalMaxDuration, 1.0);
+            targetFreq = 0.4 + Math.pow(progress, 1.4) * 2.8; 
+        } else if (currentState === 'RESPONDING') {
+            targetFreq = 0.0; 
+        }
+
+        // 工业级子步迭代算法
+        const SUBSTEPS = 4;
+        const dt = 0.012; 
+
+        for (let step = 0; step < SUBSTEPS; step++) {
+            // A. 求解大小缩放 x 
+            let k_x = stiffness * 3.0; 
+            let c_x = damping * 4.0;  
+
+            // 【专属临界阻尼调校！】
+            if (currentState === 'RESPONDING') {
+                k_x = 1.8; 
+                c_x = 2.5; 
+            } else if (currentState === 'YIELDING') {
+                k_x = 1.5;
+                c_x = 2.2;
+            }
+
+            let forceX = -k_x * (x - targetX) - c_x * vX;
+            vX += (forceX / mass) * dt;
+            x += vX * dt;
+
+            // 硬物理边界截断，防止消失
+            if (x < 0.15) {
+                x = 0.15;
+                vX = 0.0;
+            }
+
+            // B. 求解频率过渡 Freq
+            let k_f = stiffness * 3.5;
+            let c_f = damping * 2.2;
+            let forceFreq = -k_f * (currentFreq - targetFreq) - c_f * vFreq;
+            vFreq += (forceFreq / mass) * dt;
+            currentFreq += vFreq * dt;
+            if (currentFreq < 0) currentFreq = 0;
+
+            // C. 求解归一化色彩渐变
+            let targetColor = STATES[currentState].color;
+            let targetR_norm = targetColor.r / 255.0;
+            let targetG_norm = targetColor.g / 255.0;
+            let targetB_norm = targetColor.b / 255.0;
+
+            // ==========================================
+            // 【新增重磅物理系统】：非对称色彩动力学（Asymmetric Color Dynamics）
+            // ==========================================
+            // 如果目标状态是 RESPONDING（变绿），我们瞬间将色彩刚度提升 6 倍！
+            // 使得变色在一瞬间（约 10 帧内）对齐物理膨胀，消除“变色慢半拍”的拖沓感！
+            let k_c = stiffness;
+            let c_c = damping;
+            if (currentState === 'RESPONDING') {
+                k_c = stiffness * 6.0; 
+                c_c = damping * 4.0;   // 适度提高消震阻尼，防止颜色震荡
+            }
+
+            let forceR = -k_c * (currentRGB_norm.r - targetR_norm) - c_c * vR;
+            vR += (forceR / mass) * dt;
+            currentRGB_norm.r += vR * dt;
+
+            let forceG = -k_c * (currentRGB_norm.g - targetG_norm) - c_c * vG;
+            vG += (forceG / mass) * dt;
+            currentRGB_norm.g += vG * dt;
+
+            let forceB = -k_c * (currentRGB_norm.b - targetB_norm) - c_c * vB;
+            vB += (forceB / mass) * dt;
+            currentRGB_norm.b += vB * dt;
+
+            // 归一化数值截断
+            currentRGB_norm.r = Math.max(0, Math.min(1, currentRGB_norm.r));
+            currentRGB_norm.g = Math.max(0, Math.min(1, currentRGB_norm.g));
+            currentRGB_norm.b = Math.max(0, Math.min(1, currentRGB_norm.b));
+        }
+
+        // 物理安全锁
+        if (isNaN(x)) x = 1.0;
+        if (isNaN(vX)) vX = 0.0;
+        if (isNaN(currentFreq)) currentFreq = 0.5;
+        if (isNaN(vFreq)) vFreq = 0.0;
+
+        // 4. 局部相位累加计算
+        phase += 0.04 * currentFreq;
+        if (phase > Math.PI * 2) {
+            phase -= Math.PI * 2; 
+        }
+
+        // 5. 自动渐变呼吸振幅
+        let targetBreathAmp = 0.0;
+        if (currentState === 'EVALUATING') {
+            targetBreathAmp = 0.15; 
+        }
+        
+        let ampInterpRate = (currentState === 'EVALUATING') ? 0.08 : 0.15;
+        currentBreathAmp += (targetBreathAmp - currentBreathAmp) * ampInterpRate;
+
+        // 绘制准备
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+
+        let breath = (1.0 - currentBreathAmp) + Math.sin(phase) * currentBreathAmp;
+
+        const renderRadius = 75 * x * breath;
+        
+        // 色彩还原
+        const r = Math.round(currentRGB_norm.r * 255);
+        const g = Math.round(currentRGB_norm.g * 255);
+        const b = Math.round(currentRGB_norm.b * 255);
+        const colorStr = `rgb(${r}, ${g}, ${b})`;
+
+        // A. 绘制底层发光晕
+        ctx.shadowBlur = 40 * x * breath;
+        ctx.shadowColor = colorStr;
+        ctx.fillStyle = colorStr;
+        ctx.beginPath();
+        ctx.arc(cx, cy, renderRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0; // 重置
+
+        // B. 绘制半透明柔和核心
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.4)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, renderRadius * 1.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // C. 计算粒子的自适应旋转速度与向心收缩
+        let targetRotSpeed = 0.008; 
+        if (currentState === 'EVALUATING') {
+            targetRotSpeed = 0.035 + Math.pow(progress, 1.4) * 0.085; 
+        } else if (currentState === 'RESPONDING') {
+            targetRotSpeed = 0.005; 
+        }
+
+        let rotInterpRate = (currentState === 'RESPONDING') ? 0.04 : 0.12;
+        currentRotSpeed += (targetRotSpeed - currentRotSpeed) * rotInterpRate;
+
+        let targetShrink = 0.0;
+        if (currentState === 'EVALUATING') {
+            targetShrink = Math.pow(progress, 1.4) * 0.32;
+        }
+
+        let shrinkInterpRate = (currentState === 'EVALUATING') ? 0.15 : 0.04;
+        currentShrink += (targetShrink - currentShrink) * shrinkInterpRate;
+
+        // 渲染粒子漩涡
+        particles.forEach(p => {
+            p.angle += currentRotSpeed * p.speedOffset;
+            let currentDist = p.distance * (1.0 - currentShrink);
+
+            const px = cx + Math.cos(p.angle) * currentDist;
+            const py = cy + Math.sin(p.angle) * currentDist;
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${currentState === 'RESPONDING' ? 0.35 : (currentState === 'EVALUATING' ? 0.8 : 0.65)})`;
+            ctx.beginPath();
+            ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // 5. 更新 Debug 参数面板显示
+        const dbgDamping = document.getElementById('dbgDamping');
+        const dbgFreq = document.getElementById('dbgFreq');
+        const dbgTimer = document.getElementById('dbgTimer');
+        
+        if (dbgDamping) dbgDamping.innerText = damping.toFixed(3);
+        if (dbgFreq) dbgFreq.innerText = (currentState === 'RESPONDING' ? 0.0 : currentFreq).toFixed(2);
+        
+        // 实时显示自适应评估状态倒计时
+        if (dbgTimer) {
+            if (currentState === 'EVALUATING') {
+                let timeLeft = Math.max(0, evalMaxDuration - evalTime).toFixed(1);
+                dbgTimer.innerText = `${timeLeft}s 后自动应答`;
+                dbgTimer.style.color = "#ffbe00";
+            } else {
+                dbgTimer.innerText = "就绪";
+                dbgTimer.style.color = "#8892b0";
+            }
+        }
+
+        requestAnimationFrame(physicsLoop);
+    }
+
+    // 启动物理引擎
+    physicsLoop();
+</script>
+
+</body>
+</html            color: var(--bg-color);
             border-color: var(--primary-color);
         }
 
