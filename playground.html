@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGI Visual Body Language - Playground v3.1</title>
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --text-color: #c5c6c7;
+            --primary-color: #66fcf1;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        #canvas-container {
+            position: relative;
+            width: 400px;
+            height: 400px;
+            margin-bottom: 20px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(20,24,35,1) 0%, rgba(11,12,16,1) 70%);
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        }
+
+        canvas {
+            display: block;
+            border-radius: 50%;
+        }
+
+        .text-display {
+            text-align: center;
+            margin-bottom: 30px;
+            min-height: 80px;
+        }
+
+        .user-state {
+            font-size: 0.95rem;
+            color: #8892b0;
+            margin-bottom: 8px;
+            transition: color 0.3s;
+        }
+
+        .ai-state {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #ffffff;
+            letter-spacing: 1px;
+            text-shadow: 0 2px 10px rgba(255,255,255,0.1);
+        }
+
+        .control-panel {
+            background: rgba(31, 40, 51, 0.4);
+            border-radius: 12px;
+            padding: 20px;
+            width: 100%;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(102, 252, 241, 0.1);
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background: #1f2833;
+            border: 1px solid #45f3ff33;
+            color: var(--text-color);
+            padding: 12px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background: var(--primary-color);
+            color: var(--bg-color);
+            box-shadow: 0 0 15px rgba(102, 252, 241, 0.4);
+        }
+
+        button.active {
+            background: var(--primary-color);
+            color: var(--bg-color);
+            border-color: var(--primary-color);
+        }
+
+        .sliders {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+
+        .slider-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .slider-item label {
+            font-size: 0.85rem;
+            margin-bottom: 6px;
+            color: #8892b0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: #1f2833;
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .debug-panel {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #8892b0;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 15px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 1. 发光粒子/漩涡渲染画布 -->
+    <div id="canvas-container">
+        <canvas id="playgroundCanvas" width="400" height="400"></canvas>
+    </div>
+
+    <!-- 2. 非言语双行文字状态同步显示 -->
+    <div class="text-display">
+        <div class="user-state" id="userText">（用户正在说话）</div>
+        <div class="ai-state" id="aiText">正在聆听</div>
+    </div>
+
+    <!-- 3. 实时交互控制板 -->
+    <div class="control-panel">
+        <div class="button-group">
+            <button id="btnListen" class="active" onclick="switchState('LISTENING')">1. 说话(聆听)</button>
+            <button id="btnEval" onclick="switchState('EVALUATING')">2. 停顿(评估)</button>
+            <button id="btnYield" onclick="switchState('YIELDING')">3. 继续说(让步)</button>
+            <button id="btnRespond" onclick="switchState('RESPONDING')">4. 答复(应答)</button>
+        </div>
+
+        <!-- 4. 情感-物理自适应变量调校器 -->
+        <div class="sliders">
+            <div class="slider-item">
+                <label>亲密度 (Intimacy) <span id="valIntimacy">0.5</span></label>
+                <input type="range" id="slideIntimacy" min="0" max="1" step="0.05" value="0.5" oninput="updateSliders()">
+            </div>
+            <div class="slider-item">
+                <label>紧急度 (Urgency) <span id="valUrgency">0.5</span></label>
+                <input type="range" id="slideUrgency" min="0" max="1" step="0.05" value="0.5" oninput="updateSliders()">
+            </div>
+        </div>
+
+        <!-- 5. 物理引擎后台参数实时监控（DEBUG） -->
+        <div class="debug-panel">
+            <div>阻尼感 (Damping): <span id="dbgDamping">0.00</span></div>
+            <div>频率 (Freq): <span id="dbgFreq">0.00</span> Hz</div>
+            <div>物理缩放 (Scale): <span id="dbgScale">0.00</span></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('playgroundCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 交互状态定义
+    const STATES = {
+        LISTENING: { user: '（用户正在说话）', ai: '正在聆听', color: {r: 30, g: 144, b: 255} }, // 经典蓝
+        EVALUATING: { user: '（用户停顿中...）', ai: '正在评估...', color: {r: 255, g: 190, b: 0} }, // 暖黄
+        YIELDING: { user: '（用户继续说话）', ai: '继续聆听', color: {r: 30, g: 144, b: 255} }, // 回弹蓝
+        RESPONDING: { user: '（AI应答中）', ai: '好的，我明白了', color: {r: 0, g: 230, b: 118} } // 稳定绿
+    };
+
+    let currentState = 'LISTENING';
+    let lastState = 'LISTENING';
+    let evalTime = 0; // 记录评估状态持续时间，用于模拟自动变快
+
+    // 弹簧-阻尼物理引擎核心变量
+    let mass = 1.0;
+    
+    // 物理变量1: 缩放/强度弹性 (x)
+    let x = 1.0; 
+    let targetX = 1.0;
+    let vX = 0.0;
+
+    // 物理变量2: 旋转速度/频率弹性
+    let currentFreq = 0.5;
+    let targetFreq = 0.5;
+    let vFreq = 0.0;
+
+    // 物理变量3: 颜色渐变弹性 (RGB)
+    let currentRGB = {r: 30, g: 144, b: 255};
+    let vR = 0.0, vG = 0.0, vB = 0.0;
+
+    // 漩涡粒子系统初始化
+    const particles = [];
+    const PARTICLE_COUNT = 80;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particles.push({
+            angle: Math.random() * Math.PI * 2,
+            distance: Math.random() * 80 + 20,
+            size: Math.random() * 2 + 1,
+            speedOffset: Math.random() * 0.5 + 0.8
+        });
+    }
+
+    // 触发状态切换与物理突变
+    function switchState(stateName) {
+        lastState = currentState;
+        currentState = stateName;
+        evalTime = 0; // 重置评估计时器
+
+        // 更新激活按钮样式
+        document.querySelectorAll('.button-group button').forEach(btn => btn.classList.remove('active'));
+        if(stateName === 'LISTENING') document.getElementById('btnListen').classList.add('active');
+        if(stateName === 'EVALUATING') document.getElementById('btnEval').classList.add('active');
+        if(stateName === 'YIELDING') document.getElementById('btnYield').classList.add('active');
+        if(stateName === 'RESPONDING') document.getElementById('btnRespond').classList.add('active');
+
+        // 同步文字内容
+        document.getElementById('userText').innerText = STATES[stateName].user;
+        document.getElementById('aiText').innerText = STATES[stateName].ai;
+
+        // 物理突变设计 (Overshoot Impulse)
+        if (stateName === 'RESPONDING') {
+            // 应答时产生一个突然提亮放大的脉冲 (Impact)
+            vX = 0.8; 
+            targetX = 1.2;
+        } else if (stateName === 'YIELDING') {
+            // 让步时触发一次向下轻微收缩的回弹力
+            vX = -0.4;
+            targetX = 1.0;
+        } else {
+            targetX = 1.0;
+        }
+    }
+
+    // 实时更新滑块数值显示
+    function updateSliders() {
+        document.getElementById('valIntimacy').innerText = document.getElementById('slideIntimacy').value;
+        document.getElementById('valUrgency').innerText = document.getElementById('slideUrgency').value;
+    }
+
+    // 核心物理引擎计算与渲染循环 (基于物理求解器)
+    function physicsLoop() {
+        // 1. 获取滑块参数并计算 Damping c 与 Stiffness k
+        const intimacy = parseFloat(document.getElementById('slideIntimacy').value);
+        const urgency = parseFloat(document.getElementById('slideUrgency').value);
+
+        // 核心公式：Damping = Intimacy * (1 - Urgency)
+        // 我们将其映射到合理的物理阈值区间 (c: 0.05 ~ 0.5)
+        let damping = 0.05 + intimacy * (1.0 - urgency) * 0.35; 
+        
+        // 刚度 k (Stiffness) 映射。紧急度高时刚度大，系统反应生硬；亲密度高时阻尼高，表现温和
+        let stiffness = 0.05 + (urgency * 0.2) + (1.0 - damping) * 0.15;
+
+        // 2. 根据状态设定目标频率 (Target Frequency)
+        if (currentState === 'LISTENING' || currentState === 'YIELDING') {
+            targetFreq = 0.4; // 聆听：缓慢柔和
+        } else if (currentState === 'EVALUATING') {
+            evalTime += 0.016; // 假设 60fps
+            // 模拟“从慢到快逐渐加速”的脉动过程
+            targetFreq = 0.4 + Math.min(evalTime * 1.8, 3.5); 
+        } else if (currentState === 'RESPONDING') {
+            targetFreq = 0.0; // 应答：常亮，不呼吸
+        }
+
+        // 3. 求解器公式：应用弹簧-阻尼方程更新状态
+
+        // A. 求解大小缩放 x (Spring-Damper Solver)
+        let forceX = -stiffness * (x - targetX) - damping * vX;
+        let ax = forceX / mass;
+        vX += ax;
+        x += vX;
+
+        // B. 求解频率过渡 Freq (Spring-Damper Solver)
+        let forceFreq = -stiffness * (currentFreq - targetFreq) - damping * vFreq;
+        let aFreq = forceFreq / mass;
+        vFreq += aFreq;
+        currentFreq += vFreq;
+
+        // C. 求解色彩平滑渐变 RGB (每个通道独立使用阻尼器，模拟“融合”感)
+        let targetColor = STATES[currentState].color;
+        
+        let forceR = -stiffness * (currentRGB.r - targetColor.r) - damping * vR;
+        vR += forceR / mass; currentRGB.r += vR;
+
+        let forceG = -stiffness * (currentRGB.g - targetColor.g) - damping * vG;
+        vG += forceG / mass; currentRGB.g += vG;
+
+        let forceB = -stiffness * (currentRGB.b - targetColor.b) - damping * vB;
+        vB += forceB / mass; currentRGB.b += vB;
+
+        // 4. 开始画面绘制
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+
+        // 核心呼吸波形：通过物理计算的当前频率 currentFreq 动态改变发光半正弦波
+        let breath = 0.8;
+        if (currentState !== 'RESPONDING') {
+            breath = 0.85 + Math.sin(Date.now() * 0.002 * currentFreq) * 0.15;
+        }
+
+        const renderRadius = 75 * x * breath;
+        const colorStr = `rgb(${Math.round(currentRGB.r)}, ${Math.round(currentRGB.g)}, ${Math.round(currentRGB.b)})`;
+
+        // A. 绘制底层发光晕 (Glow Filter)
+        ctx.shadowBlur = 40 * x * breath;
+        ctx.shadowColor = colorStr;
+        ctx.fillStyle = colorStr;
+        ctx.beginPath();
+        ctx.arc(cx, cy, renderRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0; // 重置发光防污染
+
+        // B. 绘制半透明柔和核心
+        ctx.fillStyle = `rgba(${Math.round(currentRGB.r)}, ${Math.round(currentRGB.g)}, ${Math.round(currentRGB.b)}, 0.4)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, renderRadius * 1.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // C. 渲染旋转的漩涡粒子 (展现 v20 的涌现细节)
+        // 粒子旋转速度与当前频率 currentFreq 正相关
+        let rotSpeed = currentFreq * 0.05;
+        if (currentState === 'RESPONDING') rotSpeed = 0.01; // 应答后微弱平移
+
+        particles.forEach(p => {
+            p.angle += rotSpeed * p.speedOffset;
+            
+            // 评估阶段粒子不仅转得快，还会产生轻微向心收缩感
+            let currentDist = p.distance * x * breath;
+            if (currentState === 'EVALUATING') {
+                currentDist = p.distance * (1.0 - Math.min(evalTime * 0.05, 0.3)) * x * breath;
+            }
+
+            const px = cx + Math.cos(p.angle) * currentDist;
+            const py = cy + Math.sin(p.angle) * currentDist;
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${currentState === 'RESPONDING' ? 0.3 : 0.65})`;
+            ctx.beginPath();
+            ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // 5. 更新 Debug 参数面板显示
+        document.getElementById('dbgDamping').innerText = damping.toFixed(3);
+        document.getElementById('dbgFreq').innerText = (currentState === 'RESPONDING' ? 0.0 : currentFreq).toFixed(2);
+        document.getElementById('dbgScale').innerText = x.toFixed(2);
+
+        requestAnimationFrame(physicsLoop);
+    }
+
+    // 启动物理引擎
+    physicsLoop();
+</script>
+
+</body>
+                                        </html>
