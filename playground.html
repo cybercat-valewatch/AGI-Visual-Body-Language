@@ -160,7 +160,7 @@
             font-size: 0.8rem;
             color: #8892b0;
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr); /* 调整为4列以容纳谱半径 */
             gap: 10px;
             border-top: 1px solid rgba(255,255,255,0.05);
             padding-top: 15px;
@@ -171,18 +171,15 @@
 <body>
 
 <div class="container">
-    <!-- 1. 发光粒子画布 -->
     <div id="canvas-container">
         <canvas id="playgroundCanvas" width="400" height="400"></canvas>
     </div>
 
-    <!-- 2. 双行非言语状态文字 -->
     <div class="text-display">
         <div class="user-state" id="userText">（用户正在说话） | (User Speaking...)</div>
         <div class="ai-state" id="aiText">正在聆听 | LISTENING</div>
     </div>
 
-    <!-- 3. 控制板 -->
     <div class="control-panel">
         <div class="button-group">
             <button id="btnListen" class="active" onclick="switchState('LISTENING')">1. 聆听(说话)</button>
@@ -191,7 +188,6 @@
             <button id="btnRespond" onclick="switchState('RESPONDING')">4. 应答(答复)</button>
         </div>
 
-        <!-- 4. 情感参数调节滑块 -->
         <div class="sliders">
             <div class="slider-item">
                 <label>亲密度 (Intimacy) <span id="valIntimacy">0.5</span></label>
@@ -203,11 +199,11 @@
             </div>
         </div>
 
-        <!-- 5. 物理引擎参数显示 (Debug) -->
         <div class="debug-panel">
             <div>阻尼感 (Damping): <span id="dbgDamping">0.00</span></div>
             <div>频率 (Freq): <span id="dbgFreq">0.00</span> Hz</div>
             <div>计时器 (Timer): <span id="dbgTimer">就绪</span></div>
+            <div>谱半径 ρ(J): <span id="dbgJacobian">0.000</span></div>
         </div>
     </div>
 </div>
@@ -218,41 +214,23 @@
 
     // 双语对照状态机
     const STATES = {
-        LISTENING: { 
-            user: '（用户正在说话） | (User Speaking...)', 
-            ai: '正在聆听 | LISTENING', 
-            color: {r: 30, g: 144, b: 255} 
-        }, 
-        EVALUATING: { 
-            user: '（用户停顿中...） | (User Pausing...)', 
-            ai: '正在评估... | EVALUATING...', 
-            color: {r: 255, g: 190, b: 0} 
-        }, 
-        YIELDING: { 
-            user: '（用户继续说话） | (User Continued Speaking...)', 
-            ai: '继续聆听 | RESUMING LISTENING', 
-            color: {r: 30, g: 144, b: 255} 
-        }, 
-        RESPONDING: { 
-            user: '（AI应答中） | (AI Responding...)', 
-            ai: '好的，我明白了 | OK, I UNDERSTAND', 
-            color: {r: 0, g: 230, b: 118} 
-        } 
+        LISTENING: { user: '（用户正在说话） | (User Speaking...)', ai: '正在聆听 | LISTENING', color: {r: 30, g: 144, b: 255} }, 
+        EVALUATING: { user: '（用户停顿中...） | (User Pausing...)', ai: '正在评估... | EVALUATING...', color: {r: 255, g: 190, b: 0} }, 
+        YIELDING: { user: '（用户继续说话） | (User Continued Speaking...)', ai: '继续聆听 | RESUMING LISTENING', color: {r: 30, g: 144, b: 255} }, 
+        RESPONDING: { user: '（AI应答中） | (AI Responding...)', ai: '好的，我明白了 | OK, I UNDERSTAND', color: {r: 0, g: 230, b: 118} } 
     };
-
     let currentState = 'LISTENING';
     let lastState = 'LISTENING';
     let evalTime = 0;
-    let evalMaxDuration = 4.0; // 动态流动的评估时间
+    let evalMaxDuration = 4.0;
 
     // 局部相位累加器
     let phase = 0.0;
-
     // 核心物理变量
     let mass = 1.0;
     
     // 物理量1: 大小缩放弹性 x
-    let x = 1.0; 
+    let x = 1.0;
     let targetX = 1.0;
     let vX = 0.0;
 
@@ -264,13 +242,9 @@
     // 物理量3: 颜色渐变弹性 (RGB归一化)
     let currentRGB_norm = {r: 30/255, g: 144/255, b: 255/255};
     let vR = 0.0, vG = 0.0, vB = 0.0;
-
-    // 呼吸振幅自适应渐变 (0.0 - 0.15)
-    let currentBreathAmp = 0.0; 
-
-    // 粒子旋转速度与向心收缩
+    let currentBreathAmp = 0.0;
     let currentRotSpeed = 0.008; 
-    let currentShrink = 0.0;     
+    let currentShrink = 0.0;
 
     // 初始化漩涡粒子
     const particles = [];
@@ -290,7 +264,6 @@
         currentState = stateName;
         evalTime = 0; 
 
-        // 清除任何潜在的自动应答定时器
         clearTimeout(window.evalAutoTrigger);
 
         document.querySelectorAll('.button-group button').forEach(btn => btn.classList.remove('active'));
@@ -302,18 +275,16 @@
         document.getElementById('userText').innerText = STATES[stateName].user;
         document.getElementById('aiText').innerText = STATES[stateName].ai;
 
-        // 非对称物理动作 (Drum Hit 敲锣模型)
         if (stateName === 'RESPONDING') {
-            vX = 0.8; // 瞬间爆发（温和克制的 1.08x 膨胀）
-            targetX = 1.0; 
+            vX = 0.8;
+            targetX = 1.0;
         } else if (stateName === 'YIELDING') {
-            vX = -0.3; // 视觉让步回弹
+            vX = -0.3;
             targetX = 1.0;
         } else {
             targetX = 1.0;
         }
 
-        // 自动应答倒计时
         if (stateName === 'EVALUATING') {
             window.evalAutoTrigger = setTimeout(() => {
                 if (currentState === 'EVALUATING') {
@@ -323,15 +294,13 @@
         }
     }
 
-    // 防误触与初始相位重置代理
     function touchStateWithCheck(stateName) {
         if (stateName === 'EVALUATING') {
-            phase = 0.0; 
+            phase = 0.0;
         }
         switchState(stateName);
     }
 
-    // 动态同步滑块显示数值
     function updateSliders() {
         const slideIntimacy = document.getElementById('slideIntimacy');
         const slideUrgency = document.getElementById('slideUrgency');
@@ -347,47 +316,37 @@
         const slideUrgency = document.getElementById('slideUrgency');
         const intimacy = slideIntimacy ? parseFloat(slideIntimacy.value) : 0.5;
         const urgency = slideUrgency ? parseFloat(slideUrgency.value) : 0.5;
-
-        // 核心公式：Damping随亲密、紧急动态调节
-        let damping = 0.05 + intimacy * (1.0 - urgency) * 0.35; 
+        
+        let damping = 0.05 + intimacy * (1.0 - urgency) * 0.35;
         let stiffness = 0.05 + (urgency * 0.2) + (1.0 - damping) * 0.15;
-
-        // 【时间自适应】：评估最大时长
         evalMaxDuration = 2.5 + intimacy * 3.5 - urgency * 1.5;
         if (evalMaxDuration < 1.5) evalMaxDuration = 1.5; 
 
-        // 获取当前时间进度的百分比
         let progress = 0.0;
-
-        // 根据状态设定目标频率
         if (currentState === 'LISTENING' || currentState === 'YIELDING') {
-            targetFreq = 0.4; 
+            targetFreq = 0.4;
         } else if (currentState === 'EVALUATING') {
-            evalTime += 0.016; 
+            evalTime += 0.016;
             progress = Math.min(evalTime / evalMaxDuration, 1.0);
             
-            // 思维迟疑颤噪 (Cognitive Hesitation Flutter) 扰动
             let baseFreq = 0.4 + Math.pow(progress, 1.4) * 2.8;
             let flutter = Math.sin(evalTime * 6.5) * 0.15 * (1.0 - progress); 
-            
             targetFreq = baseFreq + flutter;
             if (targetFreq < 0.2) targetFreq = 0.2; 
         } else if (currentState === 'RESPONDING') {
-            targetFreq = 0.0; 
+            targetFreq = 0.0;
         }
 
-        // 工业级子步迭代算法
         const SUBSTEPS = 4;
         const dt = 0.012; 
 
         for (let step = 0; step < SUBSTEPS; step++) {
             // A. 求解大小缩放 x (过阻尼平稳物理参数)
-            let k_x = stiffness * 3.0; 
+            let k_x = stiffness * 3.0;
             let c_x = damping * 4.0;  
 
-            // 【专属临界阻尼调校】
             if (currentState === 'RESPONDING') {
-                k_x = 1.8; 
+                k_x = 1.8;
                 c_x = 2.5; 
             } else if (currentState === 'YIELDING') {
                 k_x = 1.5;
@@ -397,14 +356,12 @@
             let forceX = -k_x * (x - targetX) - c_x * vX;
             vX += (forceX / mass) * dt;
             x += vX * dt;
-
-            // 硬物理边界截断，防止消失
             if (x < 0.15) {
                 x = 0.15;
                 vX = 0.0;
             }
 
-            // B. 求解频率过渡 Freq (高敏对齐，完全消除延迟！)
+            // B. 求解频率过渡 Freq
             let k_f = stiffness * 3.5;
             let c_f = damping * 2.2;
             let forceFreq = -k_f * (currentFreq - targetFreq) - c_f * vFreq;
@@ -412,116 +369,144 @@
             currentFreq += vFreq * dt;
             if (currentFreq < 0) currentFreq = 0;
 
-            // C. 求解归一化色彩渐变 (非对称色彩动力学)
+            // ===========================================================================================
+            // C. 求解高阶非对称色彩动力学过渡矩阵 (Asymmetric Color Dynamics Transition Tensor) - 已更新
+            // ===========================================================================================
             let targetColor = STATES[currentState].color;
             let targetR_norm = targetColor.r / 255.0;
             let targetG_norm = targetColor.g / 255.0;
             let targetB_norm = targetColor.b / 255.0;
 
-            let k_c = stiffness;
-            let c_c = damping;
+            let k_r = stiffness, k_g = stiffness, k_b = stiffness;
+            let c_r = damping,   c_g = damping,   c_b = damping;
+
             if (currentState === 'RESPONDING') {
-                k_c = stiffness * 6.0; 
-                c_c = damping * 4.0;   
+                k_r = stiffness * 8.5;
+                k_g = stiffness * 9.0;
+                k_b = stiffness * 3.0;
+                c_r = damping * 4.5;
+                c_g = damping * 5.0;
+                c_b = damping * 7.5;
+            } else if (currentState === 'YIELDING') {
+                k_r = stiffness * 1.2;
+                k_g = stiffness * 1.0;
+                k_b = stiffness * 2.5;
+                c_r = damping * 3.5;
+                c_g = damping * 3.2;
+                c_b = damping * 2.8;
+            } else if (currentState === 'EVALUATING') {
+                let flutterMod = Math.sin(evalTime * 8.0) * 0.08 * (1.0 - progress);
+                k_r = (stiffness * 2.0) + flutterMod;
+                k_g = (stiffness * 1.8) - flutterMod;
+                k_b = stiffness * 1.0;
+                c_r = damping * 2.0;
+                c_g = damping * 2.0;
+                c_b = damping * 2.0;
             }
 
-            let forceR = -k_c * (currentRGB_norm.r - targetR_norm) - c_c * vR;
+            let forceR = -k_r * (currentRGB_norm.r - targetR_norm) - c_r * vR;
             vR += (forceR / mass) * dt;
             currentRGB_norm.r += vR * dt;
 
-            let forceG = -k_c * (currentRGB_norm.g - targetG_norm) - c_c * vG;
+            let forceG = -k_g * (currentRGB_norm.g - targetG_norm) - c_g * vG;
             vG += (forceG / mass) * dt;
             currentRGB_norm.g += vG * dt;
 
-            let forceB = -stiffness * (currentRGB_norm.b - targetB_norm) - damping * vB; 
+            let forceB = -k_b * (currentRGB_norm.b - targetB_norm) - c_b * vB;
             vB += (forceB / mass) * dt;
             currentRGB_norm.b += vB * dt;
 
-            // 归一化数值截断
             currentRGB_norm.r = Math.max(0, Math.min(1, currentRGB_norm.r));
             currentRGB_norm.g = Math.max(0, Math.min(1, currentRGB_norm.g));
             currentRGB_norm.b = Math.max(0, Math.min(1, currentRGB_norm.b));
+
+            // ===========================================================================================
+            // D. 局部雅可比谱半径张量度量算子 (Local Jacobian Spectral Radius Tensor Monitor) - 新增
+            // ===========================================================================================
+            let j00 = 1.0 - (k_x * dt * dt) / mass;
+            let j01 = dt * (1.0 - (c_x * dt) / mass) + dt;
+            let j10 = -(k_x * dt) / mass;
+            let j11 = 1.0 - (c_x * dt) / mass;
+
+            let trace_J = j00 + j11;
+            let det_J = (j00 * j11) - (j01 * j10);
+
+            let discriminant = (trace_J * trace_J) - (4.0 * det_J);
+            let rho_J = 0.0;
+
+            if (discriminant >= 0) {
+                let lambda1 = (trace_J + Math.sqrt(discriminant)) / 2.0;
+                let lambda2 = (trace_J - Math.sqrt(discriminant)) / 2.0;
+                rho_J = Math.max(Math.abs(lambda1), Math.abs(lambda2));
+            } else {
+                rho_J = Math.sqrt(det_J);
+            }
+
+            window.currentSpectralRadius = rho_J;
+            // ===========================================================================================
         }
 
-        // 物理安全锁
         if (isNaN(x)) x = 1.0;
         if (isNaN(vX)) vX = 0.0;
         if (isNaN(currentFreq)) currentFreq = 0.5;
         if (isNaN(vFreq)) vFreq = 0.0;
 
-        // 4. 局部相位累加计算
         phase += 0.04 * currentFreq;
         if (phase > Math.PI * 2) {
-            phase -= Math.PI * 2; 
+            phase -= Math.PI * 2;
         }
 
-        // 5. 自动渐变呼吸振幅
         let targetBreathAmp = 0.0;
         if (currentState === 'EVALUATING') {
-            targetBreathAmp = 0.15; 
+            targetBreathAmp = 0.15;
         }
         
         let ampInterpRate = (currentState === 'EVALUATING') ? 0.08 : 0.15;
         currentBreathAmp += (targetBreathAmp - currentBreathAmp) * ampInterpRate;
 
-        // 绘制准备
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const cx = canvas.width / 2;
         const cy = canvas.height / 2;
 
         let breath = (1.0 - currentBreathAmp) + Math.sin(phase) * currentBreathAmp;
-
         const renderRadius = 75 * x * breath;
         
-        // 色彩还原
         const r = Math.round(currentRGB_norm.r * 255);
         const g = Math.round(currentRGB_norm.g * 255);
         const b = Math.round(currentRGB_norm.b * 255);
         const colorStr = `rgb(${r}, ${g}, ${b})`;
 
-        // A. 绘制底层发光晕
         ctx.shadowBlur = 40 * x * breath;
         ctx.shadowColor = colorStr;
         ctx.fillStyle = colorStr;
         ctx.beginPath();
         ctx.arc(cx, cy, renderRadius, 0, Math.PI * 2);
         ctx.fill();
-        ctx.shadowBlur = 0; // 重置
+        ctx.shadowBlur = 0;
 
-        // B. 绘制半透明柔和核心
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.4)`;
         ctx.beginPath();
         ctx.arc(cx, cy, renderRadius * 1.1, 0, Math.PI * 2);
         ctx.fill();
-
-        // ==========================================
-        // C. 【新增物理系统】：计算粒子的自适应旋转速度与向心收缩
-        // ==========================================
         
-        // 动态计算白点的热运动剧烈度 (思维温差模型)
         let noiseIntensity = 1.0;
         if (currentState === 'EVALUATING') {
-            noiseIntensity = 1.0 + Math.pow(progress, 1.4) * 1.5; 
+            noiseIntensity = 1.0 + Math.pow(progress, 1.4) * 1.5;
         } else if (currentState === 'RESPONDING') {
-            noiseIntensity = 0.4; 
+            noiseIntensity = 0.4;
         }
 
-        let targetRotSpeed = 0.008; // 默认极慢旋转（聆听与让步）
+        let targetRotSpeed = 0.008;
         if (currentState === 'EVALUATING') {
-            // 【重磅重构：终点冲刺推进器（Cubic Sprint Boost）】
-            // 我们在评估的前 82% 时间内（前4.5秒）进行平稳加速；
-            // 一旦进入最后 18% 倒计时（最后1.0秒），启动 3.0次立方幂 冲刺推进！
-            // 使得粒子转速在最后关头瞬间以极具张力的弧度“疯狂飚速”至最高点（0.170），完美呈现出蓄力临界冲刺感！
             let baseRot = 0.035 + Math.pow(progress, 1.4) * 0.065;
             let sprintBoost = 0.0;
-            
             if (progress > 0.82) {
-                let sprintProgress = (progress - 0.82) / 0.18; // 归一化最后 18% 的进度为 0.0 - 1.0
-                sprintBoost = Math.pow(sprintProgress, 3.0) * 0.07; // 3次幂陡峭冲刺曲线
+                let sprintProgress = (progress - 0.82) / 0.18;
+                sprintBoost = Math.pow(sprintProgress, 3.0) * 0.07;
             }
             targetRotSpeed = baseRot + sprintBoost;
         } else if (currentState === 'RESPONDING') {
-            targetRotSpeed = 0.005; // 应答后瞬间几乎停下
+            targetRotSpeed = 0.005;
         }
 
         let rotInterpRate = (currentState === 'RESPONDING') ? 0.04 : 0.12;
@@ -535,9 +520,7 @@
         let shrinkInterpRate = (currentState === 'EVALUATING') ? 0.15 : 0.04;
         currentShrink += (targetShrink - currentShrink) * shrinkInterpRate;
 
-        // 渲染粒子漩涡
         particles.forEach(p => {
-            // 粒子热运动高频扰动
             let thermalJitterAngle = Math.sin(Date.now() * 0.005 + p.distance) * 0.05 * noiseIntensity; 
             let thermalJitterDist = Math.cos(Date.now() * 0.003 + p.angle) * 3.5 * noiseIntensity; 
 
@@ -553,15 +536,15 @@
             ctx.fill();
         });
 
-        // 5. 更新 Debug 参数面板显示
+        // 5. 更新 Debug 参数面板显示 - 已更新
         const dbgDamping = document.getElementById('dbgDamping');
         const dbgFreq = document.getElementById('dbgFreq');
         const dbgTimer = document.getElementById('dbgTimer');
+        const dbgJacobian = document.getElementById('dbgJacobian'); 
         
         if (dbgDamping) dbgDamping.innerText = damping.toFixed(3);
         if (dbgFreq) dbgFreq.innerText = (currentState === 'RESPONDING' ? 0.0 : currentFreq).toFixed(2);
         
-        // 实时显示自适应评估状态倒计时
         if (dbgTimer) {
             if (currentState === 'EVALUATING') {
                 let timeLeft = Math.max(0, evalMaxDuration - evalTime).toFixed(1);
@@ -573,15 +556,23 @@
             }
         }
 
+        // 实时渲染局部雅可比谱半径
+        if (dbgJacobian && window.currentSpectralRadius !== undefined) {
+            dbgJacobian.innerText = window.currentSpectralRadius.toFixed(4);
+            if (window.currentSpectralRadius > 1.0) {
+                dbgJacobian.style.color = "#ff4d4d"; // 误差膨胀区突变警告红
+            } else {
+                dbgJacobian.style.color = "#66fcf1"; // 稳定区高贵青
+            }
+        }
+
         requestAnimationFrame(physicsLoop);
     }
 
-    // 辅助防报错函数
     function currentBreathAngleMultiplier() { return currentBreathAmp; }
 
-    // 启动物理引擎
     physicsLoop();
 </script>
 
 </body>
-    </html>
+</html>
