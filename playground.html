@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGI Visual Body Language - Playground v3.19</title>
+    <title>AGI Visual Body Language - Playground v3.20 (Audio Reactive)</title>
     <style>
         :root {
             --bg-color: #0b0c10;
@@ -52,7 +52,7 @@
 
         .text-display {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             min-height: 80px;
         }
 
@@ -86,7 +86,7 @@
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 10px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
 
         button {
@@ -110,6 +110,22 @@
             background: var(--primary-color);
             color: var(--bg-color);
             border-color: var(--primary-color);
+        }
+
+        .mic-box {
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .btn-mic {
+            background: #1f2833;
+            border: 1px solid #66fcf155;
+            color: #66fcf1;
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.9rem;
         }
 
         .sliders {
@@ -181,6 +197,10 @@
     </div>
 
     <div class="control-panel">
+        <div class="mic-box">
+            <button id="btnMic" class="btn-mic" onclick="initAudio()">🎙️ 点击开启麦克风动态感知联觉 (Enable GNVE Audio Input)</button>
+        </div>
+
         <div class="button-group">
             <button id="btnListen" class="active" onclick="switchState('LISTENING')">1. 聆听(说话)</button>
             <button id="btnEval" onclick="touchStateWithCheck('EVALUATING')">2. 评估(停顿)</button>
@@ -212,7 +232,11 @@
     const canvas = document.getElementById('playgroundCanvas');
     const ctx = canvas.getContext('2d');
 
-    // 双语对照状态机
+    // Web Audio API 变量
+    let audioContext, analyser, dataArray;
+    let micVolume = 0.0; // 缓动过渡的音频能量值
+
+    // 状态机定义
     const STATES = {
         LISTENING: { user: '（用户正在说话） | (User Speaking...)', ai: '正在聆听 | LISTENING', color: {r: 30, g: 144, b: 255} }, 
         EVALUATING: { user: '（用户停顿中...） | (User Pausing...)', ai: '正在评估... | EVALUATING...', color: {r: 255, g: 190, b: 0} }, 
@@ -224,26 +248,21 @@
     let evalTime = 0;
     let evalMaxDuration = 4.0;
 
-    // 局部相位累加器
     let phase = 0.0;
-    // 核心物理变量
     let mass = 1.0;
     
-    // 物理量1: 大小缩放弹性 x
     let x = 1.0;
     let targetX = 1.0;
     let vX = 0.0;
 
-    // 物理量2: 呼吸/旋转速度弹性 Freq
     let currentFreq = 0.5;
     let targetFreq = 0.5;
     let vFreq = 0.0;
 
-    // 物理量3: 颜色渐变弹性 (RGB归一化)
     let currentRGB_norm = {r: 30/255, g: 144/255, b: 255/255};
     let vR = 0.0, vG = 0.0, vB = 0.0;
     let currentBreathAmp = 0.0;
-    let currentRotSpeed = 0.008; 
+    let currentRotSpeed = 0.008;
     let currentShrink = 0.0;
 
     // 初始化漩涡粒子
@@ -258,7 +277,29 @@
         });
     }
 
-    // 状态切换事件
+    // 初始化麦克风输入接口
+    function initAudio() {
+        if (audioContext) return;
+        navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 64; // 较小的FFT采样，专注捕捉音量动态起伏
+            source.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            
+            const btnMic = document.getElementById('btnMic');
+            btnMic.innerText = "🎙️ GNVE 麦克风动态同步中 (Audio Reactive On)";
+            btnMic.style.background = "var(--primary-color)";
+            btnMic.style.color = "#0b0c10";
+            btnMic.style.borderColor = "var(--primary-color)";
+        }).catch(err => {
+            console.error("无法访问麦克风:", err);
+            alert("未检测到麦克风权限，请允许浏览器访问录音设备以体验动态连觉效果。");
+        });
+    }
+
     function switchState(stateName) {
         lastState = currentState;
         currentState = stateName;
@@ -279,13 +320,9 @@
             vX = 0.8;
             targetX = 1.0;
         } else if (stateName === 'YIELDING') {
-            // ==========================================
-            // v3.19 核心爆破改动：
-            // 模拟人类瞬间抢词成功，光圈被声能猛烈“轰开”扩散，然后再靠高阻尼回弹
-            // ==========================================
-            vX = 3.2;         // 给一个极大的前向爆发初始速度
-            targetX = 1.0;    // 最终回弹目标仍然是标准大小
-            phase = 0.0;      // 重置局部相位，配合瞬间爆开发散
+            vX = 3.2;         // v3.19 爆发级前向速度
+            targetX = 1.0;    
+            phase = 0.0;      
         } else {
             targetX = 1.0;
         }
@@ -315,7 +352,7 @@
         }
     }
 
-    // 物理自适应主渲染循环
+    // 核心流体物理渲染循环
     function physicsLoop() {
         const slideIntimacy = document.getElementById('slideIntimacy');
         const slideUrgency = document.getElementById('slideUrgency');
@@ -327,11 +364,25 @@
         evalMaxDuration = 2.5 + intimacy * 3.5 - urgency * 1.5;
         if (evalMaxDuration < 1.5) evalMaxDuration = 1.5; 
 
+        // 1. 实时捕获麦克风分贝并注入过阻尼平滑器
+        if (analyser && (currentState === 'LISTENING' || currentState === 'YIELDING')) {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            let targetVolume = sum / dataArray.length / 255.0; // 归一化声音强度
+            // 使用一阶低通滤波对音频输入做物理平滑过渡，消除毛刺高频
+            micVolume += (targetVolume - micVolume) * 0.25; 
+        } else {
+            // 在非聆听状态下，快速淡出麦克风噪音带来的视觉扰动
+            micVolume += (0.0 - micVolume) * 0.15;
+        }
+
         let progress = 0.0;
         if (currentState === 'LISTENING') {
-            targetFreq = 0.4;
+            targetFreq = 0.4 + micVolume * 0.6; // 声音越大，呼吸基准频率略微跟着加速
         } else if (currentState === 'YIELDING') {
-            // 让步状态下的基础旋转目标调低，让粒子慢慢安静下来
             targetFreq = 0.3;
         } else if (currentState === 'EVALUATING') {
             evalTime += 0.016;
@@ -349,7 +400,6 @@
         const dt = 0.012; 
 
         for (let step = 0; step < SUBSTEPS; step++) {
-            // A. 求解大小缩放 x (过阻尼平稳物理参数)
             let k_x = stiffness * 3.0;
             let c_x = damping * 4.0;  
 
@@ -357,13 +407,17 @@
                 k_x = 1.8;
                 c_x = 2.5; 
             } else if (currentState === 'YIELDING') {
-                // 让步状态为了承受刚刚瞬间大爆发(vX=3.2)带来的弹簧拉力
-                // 我们给予高刚度和极强阻尼，让它能快速震荡两下后温和收拢
                 k_x = 2.8;
                 c_x = 4.2;
             }
 
-            let forceX = -k_x * (x - targetX) - c_x * vX;
+            // 在聆听状态下，声音的大小可以轻微整体正向撑大弹簧模型 (膨胀效果)
+            let dynamicTargetX = targetX;
+            if (currentState === 'LISTENING') {
+                dynamicTargetX += micVolume * 0.25;
+            }
+
+            let forceX = -k_x * (x - dynamicTargetX) - c_x * vX;
             vX += (forceX / mass) * dt;
             x += vX * dt;
             if (x < 0.15) {
@@ -371,7 +425,6 @@
                 vX = 0.0;
             }
 
-            // B. 求解频率过渡 Freq
             let k_f = stiffness * 3.5;
             let c_f = damping * 2.2;
             let forceFreq = -k_f * (currentFreq - targetFreq) - c_f * vFreq;
@@ -379,7 +432,6 @@
             currentFreq += vFreq * dt;
             if (currentFreq < 0) currentFreq = 0;
 
-            // C. 求解高阶非对称色彩动力学过渡矩阵
             let targetColor = STATES[currentState].color;
             let targetR_norm = targetColor.r / 255.0;
             let targetG_norm = targetColor.g / 255.0;
@@ -396,7 +448,6 @@
                 c_g = damping * 5.0;
                 c_b = damping * 7.5;
             } else if (currentState === 'YIELDING') {
-                // 从惊慌的黄色切回深蓝，色彩转换需要一定的视觉连贯性
                 k_r = stiffness * 2.5;
                 k_g = stiffness * 2.0;
                 k_b = stiffness * 4.0;
@@ -429,7 +480,6 @@
             currentRGB_norm.g = Math.max(0, Math.min(1, currentRGB_norm.g));
             currentRGB_norm.b = Math.max(0, Math.min(1, currentRGB_norm.b));
 
-            // D. 局部雅可比谱半径张量度量算子
             let j00 = 1.0 - (k_x * dt * dt) / mass;
             let j01 = dt * (1.0 - (c_x * dt) / mass) + dt;
             let j10 = -(k_x * dt) / mass;
@@ -448,7 +498,6 @@
             } else {
                 rho_J = Math.sqrt(det_J);
             }
-
             window.currentSpectralRadius = rho_J;
         }
 
@@ -466,8 +515,10 @@
         if (currentState === 'EVALUATING') {
             targetBreathAmp = 0.15;
         } else if (currentState === 'YIELDING') {
-            // 让步爆发时，给呼吸振幅来一个短暂的剧烈扰动
             targetBreathAmp = 0.3 * Math.max(0, 1.0 - evalTime);
+        } else if (currentState === 'LISTENING') {
+            // 聆听时，根据音量大小，动态扩大呼吸幅度
+            targetBreathAmp = 0.05 + micVolume * 0.15;
         }
         
         let ampInterpRate = (currentState === 'EVALUATING') ? 0.08 : 0.15;
@@ -485,27 +536,67 @@
         const b = Math.round(currentRGB_norm.b * 255);
         const colorStr = `rgb(${r}, ${g}, ${b})`;
 
+        // =========================================================================================
+        // 🚀 核心大招：改写渲染，通过120个多项式边际顶点绘制“液态波纹起伏”
+        // =========================================================================================
         ctx.shadowBlur = 40 * x * breath;
         ctx.shadowColor = colorStr;
         ctx.fillStyle = colorStr;
+        
         ctx.beginPath();
-        ctx.arc(cx, cy, renderRadius, 0, Math.PI * 2);
+        const NUM_VERTICES = 120; // 120个顶点闭合曲线，兼顾顺滑与计算效率
+        for (let i = 0; i < NUM_VERTICES; i++) {
+            let angle = (i / NUM_VERTICES) * Math.PI * 2;
+            
+            // 复合叠加波：在聆听状态下，结合声音能量、相位和特定角度频率，揉捏出液体水滴震荡感
+            let dynamicWave = 0;
+            if (currentState === 'LISTENING' && micVolume > 0.02) {
+                let wave1 = Math.sin(angle * 5 + phase * 2.5) * 12.0 * micVolume;
+                let wave2 = Math.cos(angle * 3 - phase * 1.2) * 6.0 * micVolume;
+                let wave3 = Math.sin(angle * 8 + phase * 4.0) * 3.0 * micVolume; // 高频次波增加质感
+                dynamicWave = wave1 + wave2 + wave3;
+            }
+            
+            let currentRadius = renderRadius + dynamicWave;
+            let px = cx + Math.cos(angle) * currentRadius;
+            let py = cy + Math.sin(angle) * currentRadius;
+            
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.4)`;
+        // 绘制半透明外晕层
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.3)`;
         ctx.beginPath();
-        ctx.arc(cx, cy, renderRadius * 1.1, 0, Math.PI * 2);
+        for (let i = 0; i < NUM_VERTICES; i++) {
+            let angle = (i / NUM_VERTICES) * Math.PI * 2;
+            let dynamicWave = 0;
+            if (currentState === 'LISTENING' && micVolume > 0.02) {
+                dynamicWave = Math.sin(angle * 5 + phase * 2.5) * 15.0 * micVolume; // 外圈波纹稍微放大
+            }
+            let currentRadius = (renderRadius * 1.12) + dynamicWave;
+            let px = cx + Math.cos(angle) * currentRadius;
+            let py = cy + Math.sin(angle) * currentRadius;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
         ctx.fill();
         
+        // 2. 漩涡粒子受声波震荡控制
         let noiseIntensity = 1.0;
         if (currentState === 'EVALUATING') {
             noiseIntensity = 1.0 + Math.pow(progress, 1.4) * 1.5;
         } else if (currentState === 'RESPONDING') {
             noiseIntensity = 0.4;
         } else if (currentState === 'YIELDING') {
-            // 让步的瞬间，由于声波震荡，外部粒子短暂地无序乱飞(高Noise)
             noiseIntensity = 2.5 * Math.max(0, 1.0 - x);
+        } else if (currentState === 'LISTENING') {
+            // 说话声音越大，粒子受到“声能辐射”从而发生越强烈的无序扰动
+            noiseIntensity = 1.0 + micVolume * 3.0;
         }
 
         let targetRotSpeed = 0.008;
@@ -520,7 +611,6 @@
         } else if (currentState === 'RESPONDING') {
             targetRotSpeed = 0.005;
         } else if (currentState === 'YIELDING') {
-            // 爆开时漩涡强烈外旋，随后迅速回落
             targetRotSpeed = 0.04;
         }
 
@@ -531,8 +621,10 @@
         if (currentState === 'EVALUATING') {
             targetShrink = Math.pow(progress, 1.4) * 0.32;
         } else if (currentState === 'YIELDING') {
-            // 让步状态下 shrink 变成负数（代表扩张反弹爆开效果）
             targetShrink = -0.35 * Math.max(0, 1.0 - evalTime);
+        } else if (currentState === 'LISTENING') {
+            // 声音能量转化为离心力，大声说话时粒子会轻微向外扩散扩展（Shrink 为负）
+            targetShrink = -micVolume * 0.15;
         }
 
         let shrinkInterpRate = (currentState === 'EVALUATING') ? 0.15 : 0.06;
@@ -571,13 +663,15 @@
             } else if (currentState === 'YIELDING') {
                 dbgTimer.innerText = "💥 抢词爆发让步";
                 dbgTimer.style.color = "#66fcf1";
+            } else if (currentState === 'LISTENING' && analyser) {
+                dbgTimer.innerText = `🎙️ 声音输入: ${(micVolume * 100).toFixed(0)}%`;
+                dbgTimer.style.color = "var(--primary-color)";
             } else {
                 dbgTimer.innerText = "就绪";
                 dbgTimer.style.color = "#8892b0";
             }
         }
 
-        // 实时渲染局部雅可比谱半径
         if (dbgJacobian && window.currentSpectralRadius !== undefined) {
             dbgJacobian.innerText = window.currentSpectralRadius.toFixed(4);
             if (window.currentSpectralRadius > 1.0) {
@@ -590,10 +684,8 @@
         requestAnimationFrame(physicsLoop);
     }
 
-    function currentBreathAngleMultiplier() { return currentBreathAmp; }
-
     physicsLoop();
 </script>
 
 </body>
-                    </html>
+</html>
