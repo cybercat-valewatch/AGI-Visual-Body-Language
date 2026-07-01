@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGI Visual Body Language - Playground v3.18</title>
+    <title>AGI Visual Body Language - Playground v3.19</title>
     <style>
         :root {
             --bg-color: #0b0c10;
@@ -160,7 +160,7 @@
             font-size: 0.8rem;
             color: #8892b0;
             display: grid;
-            grid-template-columns: repeat(4, 1fr); /* 调整为4列以容纳谱半径 */
+            grid-template-columns: repeat(4, 1fr);
             gap: 10px;
             border-top: 1px solid rgba(255,255,255,0.05);
             padding-top: 15px;
@@ -279,8 +279,13 @@
             vX = 0.8;
             targetX = 1.0;
         } else if (stateName === 'YIELDING') {
-            vX = -0.3;
-            targetX = 1.0;
+            // ==========================================
+            // v3.19 核心爆破改动：
+            // 模拟人类瞬间抢词成功，光圈被声能猛烈“轰开”扩散，然后再靠高阻尼回弹
+            // ==========================================
+            vX = 3.2;         // 给一个极大的前向爆发初始速度
+            targetX = 1.0;    // 最终回弹目标仍然是标准大小
+            phase = 0.0;      // 重置局部相位，配合瞬间爆开发散
         } else {
             targetX = 1.0;
         }
@@ -323,8 +328,11 @@
         if (evalMaxDuration < 1.5) evalMaxDuration = 1.5; 
 
         let progress = 0.0;
-        if (currentState === 'LISTENING' || currentState === 'YIELDING') {
+        if (currentState === 'LISTENING') {
             targetFreq = 0.4;
+        } else if (currentState === 'YIELDING') {
+            // 让步状态下的基础旋转目标调低，让粒子慢慢安静下来
+            targetFreq = 0.3;
         } else if (currentState === 'EVALUATING') {
             evalTime += 0.016;
             progress = Math.min(evalTime / evalMaxDuration, 1.0);
@@ -349,8 +357,10 @@
                 k_x = 1.8;
                 c_x = 2.5; 
             } else if (currentState === 'YIELDING') {
-                k_x = 1.5;
-                c_x = 2.2;
+                // 让步状态为了承受刚刚瞬间大爆发(vX=3.2)带来的弹簧拉力
+                // 我们给予高刚度和极强阻尼，让它能快速震荡两下后温和收拢
+                k_x = 2.8;
+                c_x = 4.2;
             }
 
             let forceX = -k_x * (x - targetX) - c_x * vX;
@@ -369,9 +379,7 @@
             currentFreq += vFreq * dt;
             if (currentFreq < 0) currentFreq = 0;
 
-            // ===========================================================================================
-            // C. 求解高阶非对称色彩动力学过渡矩阵 (Asymmetric Color Dynamics Transition Tensor) - 已更新
-            // ===========================================================================================
+            // C. 求解高阶非对称色彩动力学过渡矩阵
             let targetColor = STATES[currentState].color;
             let targetR_norm = targetColor.r / 255.0;
             let targetG_norm = targetColor.g / 255.0;
@@ -388,12 +396,13 @@
                 c_g = damping * 5.0;
                 c_b = damping * 7.5;
             } else if (currentState === 'YIELDING') {
-                k_r = stiffness * 1.2;
-                k_g = stiffness * 1.0;
-                k_b = stiffness * 2.5;
-                c_r = damping * 3.5;
-                c_g = damping * 3.2;
-                c_b = damping * 2.8;
+                // 从惊慌的黄色切回深蓝，色彩转换需要一定的视觉连贯性
+                k_r = stiffness * 2.5;
+                k_g = stiffness * 2.0;
+                k_b = stiffness * 4.0;
+                c_r = damping * 3.0;
+                c_g = damping * 2.8;
+                c_b = damping * 3.5;
             } else if (currentState === 'EVALUATING') {
                 let flutterMod = Math.sin(evalTime * 8.0) * 0.08 * (1.0 - progress);
                 k_r = (stiffness * 2.0) + flutterMod;
@@ -420,9 +429,7 @@
             currentRGB_norm.g = Math.max(0, Math.min(1, currentRGB_norm.g));
             currentRGB_norm.b = Math.max(0, Math.min(1, currentRGB_norm.b));
 
-            // ===========================================================================================
-            // D. 局部雅可比谱半径张量度量算子 (Local Jacobian Spectral Radius Tensor Monitor) - 新增
-            // ===========================================================================================
+            // D. 局部雅可比谱半径张量度量算子
             let j00 = 1.0 - (k_x * dt * dt) / mass;
             let j01 = dt * (1.0 - (c_x * dt) / mass) + dt;
             let j10 = -(k_x * dt) / mass;
@@ -443,7 +450,6 @@
             }
 
             window.currentSpectralRadius = rho_J;
-            // ===========================================================================================
         }
 
         if (isNaN(x)) x = 1.0;
@@ -459,6 +465,9 @@
         let targetBreathAmp = 0.0;
         if (currentState === 'EVALUATING') {
             targetBreathAmp = 0.15;
+        } else if (currentState === 'YIELDING') {
+            // 让步爆发时，给呼吸振幅来一个短暂的剧烈扰动
+            targetBreathAmp = 0.3 * Math.max(0, 1.0 - evalTime);
         }
         
         let ampInterpRate = (currentState === 'EVALUATING') ? 0.08 : 0.15;
@@ -494,6 +503,9 @@
             noiseIntensity = 1.0 + Math.pow(progress, 1.4) * 1.5;
         } else if (currentState === 'RESPONDING') {
             noiseIntensity = 0.4;
+        } else if (currentState === 'YIELDING') {
+            // 让步的瞬间，由于声波震荡，外部粒子短暂地无序乱飞(高Noise)
+            noiseIntensity = 2.5 * Math.max(0, 1.0 - x);
         }
 
         let targetRotSpeed = 0.008;
@@ -507,6 +519,9 @@
             targetRotSpeed = baseRot + sprintBoost;
         } else if (currentState === 'RESPONDING') {
             targetRotSpeed = 0.005;
+        } else if (currentState === 'YIELDING') {
+            // 爆开时漩涡强烈外旋，随后迅速回落
+            targetRotSpeed = 0.04;
         }
 
         let rotInterpRate = (currentState === 'RESPONDING') ? 0.04 : 0.12;
@@ -515,9 +530,12 @@
         let targetShrink = 0.0;
         if (currentState === 'EVALUATING') {
             targetShrink = Math.pow(progress, 1.4) * 0.32;
+        } else if (currentState === 'YIELDING') {
+            // 让步状态下 shrink 变成负数（代表扩张反弹爆开效果）
+            targetShrink = -0.35 * Math.max(0, 1.0 - evalTime);
         }
 
-        let shrinkInterpRate = (currentState === 'EVALUATING') ? 0.15 : 0.04;
+        let shrinkInterpRate = (currentState === 'EVALUATING') ? 0.15 : 0.06;
         currentShrink += (targetShrink - currentShrink) * shrinkInterpRate;
 
         particles.forEach(p => {
@@ -536,7 +554,7 @@
             ctx.fill();
         });
 
-        // 5. 更新 Debug 参数面板显示 - 已更新
+        // 5. 更新 Debug 参数面板显示
         const dbgDamping = document.getElementById('dbgDamping');
         const dbgFreq = document.getElementById('dbgFreq');
         const dbgTimer = document.getElementById('dbgTimer');
@@ -550,6 +568,9 @@
                 let timeLeft = Math.max(0, evalMaxDuration - evalTime).toFixed(1);
                 dbgTimer.innerText = `${timeLeft}s 后自动应答`;
                 dbgTimer.style.color = "#ffbe00";
+            } else if (currentState === 'YIELDING') {
+                dbgTimer.innerText = "💥 抢词爆发让步";
+                dbgTimer.style.color = "#66fcf1";
             } else {
                 dbgTimer.innerText = "就绪";
                 dbgTimer.style.color = "#8892b0";
@@ -560,9 +581,9 @@
         if (dbgJacobian && window.currentSpectralRadius !== undefined) {
             dbgJacobian.innerText = window.currentSpectralRadius.toFixed(4);
             if (window.currentSpectralRadius > 1.0) {
-                dbgJacobian.style.color = "#ff4d4d"; // 误差膨胀区突变警告红
+                dbgJacobian.style.color = "#ff4d4d"; 
             } else {
-                dbgJacobian.style.color = "#66fcf1"; // 稳定区高贵青
+                dbgJacobian.style.color = "#66fcf1"; 
             }
         }
 
@@ -575,4 +596,4 @@
 </script>
 
 </body>
-</html>
+                    </html>
