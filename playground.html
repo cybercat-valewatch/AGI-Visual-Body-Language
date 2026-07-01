@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGI Visual Body Language - Playground v3.20 (Audio Reactive)</title>
+    <title>AGI Visual Body Language - Playground v4.0 (Autonomous VAD)</title>
     <style>
         :root {
             --bg-color: #0b0c10;
@@ -123,9 +123,12 @@
             border: 1px solid #66fcf155;
             color: #66fcf1;
             width: 100%;
-            padding: 10px;
+            padding: 12px;
             border-radius: 6px;
-            font-size: 0.9rem;
+            font-size: 0.95rem;
+            font-weight: bold;
+            box-shadow: 0 0 10px rgba(102,252,241,0.1);
+            transition: all 0.3s;
         }
 
         .sliders {
@@ -198,7 +201,7 @@
 
     <div class="control-panel">
         <div class="mic-box">
-            <button id="btnMic" class="btn-mic" onclick="initAudio()">🎙️ 点击开启麦克风动态感知联觉 (Enable GNVE Audio Input)</button>
+            <button id="btnMic" class="btn-mic" onclick="initAudio()">🎙️ 唤醒全自动具身 VAD 状态机 (Enable Fully Autonomous GNVE)</button>
         </div>
 
         <div class="button-group">
@@ -232,11 +235,15 @@
     const canvas = document.getElementById('playgroundCanvas');
     const ctx = canvas.getContext('2d');
 
-    // Web Audio API 变量
     let audioContext, analyser, dataArray;
-    let micVolume = 0.0; // 缓动过渡的音频能量值
+    let micVolume = 0.0; 
 
-    // 状态机定义
+    // 自制自适应全自动 VAD 核心控制参数
+    const SILENCE_THRESHOLD = 0.035; // 判定为静音的归一化音量阈值
+    const SPEAKING_THRESHOLD = 0.05; // 判定为重新开口说话的音量阈值
+    let silenceDuration = 0.0;       // 静音累积时长（秒）
+    let yieldingDuration = 0.0;      // 让步爆发状态状态停留计时器
+
     const STATES = {
         LISTENING: { user: '（用户正在说话） | (User Speaking...)', ai: '正在聆听 | LISTENING', color: {r: 30, g: 144, b: 255} }, 
         EVALUATING: { user: '（用户停顿中...） | (User Pausing...)', ai: '正在评估... | EVALUATING...', color: {r: 255, g: 190, b: 0} }, 
@@ -265,7 +272,6 @@
     let currentRotSpeed = 0.008;
     let currentShrink = 0.0;
 
-    // 初始化漩涡粒子
     const particles = [];
     const PARTICLE_COUNT = 80;
     for (let i = 0; i < PARTICLE_COUNT; i++) {
@@ -277,7 +283,6 @@
         });
     }
 
-    // 初始化麦克风输入接口
     function initAudio() {
         if (audioContext) return;
         navigator.mediaDevices.getUserMedia({ audio: true })
@@ -285,18 +290,19 @@
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const source = audioContext.createMediaStreamSource(stream);
             analyser = audioContext.createAnalyser();
-            analyser.fftSize = 64; // 较小的FFT采样，专注捕捉音量动态起伏
+            analyser.fftSize = 64; 
             source.connect(analyser);
             dataArray = new Uint8Array(analyser.frequencyBinCount);
             
             const btnMic = document.getElementById('btnMic');
-            btnMic.innerText = "🎙️ GNVE 麦克风动态同步中 (Audio Reactive On)";
-            btnMic.style.background = "var(--primary-color)";
+            btnMic.innerText = "🤖 自动 VAD 已激活 • 全语音无鼠标交互中";
+            btnMic.style.background = "#00e676";
             btnMic.style.color = "#0b0c10";
-            btnMic.style.borderColor = "var(--primary-color)";
+            btnMic.style.borderColor = "#00e676";
+            btnMic.style.boxShadow = "0 0 20px rgba(0,230,118,0.4)";
         }).catch(err => {
             console.error("无法访问麦克风:", err);
-            alert("未检测到麦克风权限，请允许浏览器访问录音设备以体验动态连觉效果。");
+            alert("请允许麦克风权限以体验全自动 VAD 逻辑。");
         });
     }
 
@@ -304,6 +310,7 @@
         lastState = currentState;
         currentState = stateName;
         evalTime = 0; 
+        yieldingDuration = 0.0; // 重置让步计时器
 
         clearTimeout(window.evalAutoTrigger);
 
@@ -320,7 +327,7 @@
             vX = 0.8;
             targetX = 1.0;
         } else if (stateName === 'YIELDING') {
-            vX = 3.2;         // v3.19 爆发级前向速度
+            vX = 3.2;         
             targetX = 1.0;    
             phase = 0.0;      
         } else {
@@ -352,7 +359,6 @@
         }
     }
 
-    // 核心流体物理渲染循环
     function physicsLoop() {
         const slideIntimacy = document.getElementById('slideIntimacy');
         const slideUrgency = document.getElementById('slideUrgency');
@@ -364,24 +370,51 @@
         evalMaxDuration = 2.5 + intimacy * 3.5 - urgency * 1.5;
         if (evalMaxDuration < 1.5) evalMaxDuration = 1.5; 
 
-        // 1. 实时捕获麦克风分贝并注入过阻尼平滑器
-        if (analyser && (currentState === 'LISTENING' || currentState === 'YIELDING')) {
+        // -----------------------------------------------------------------------------------------
+        // 🔮 全自动 VAD 边缘状态机决策层
+        // -----------------------------------------------------------------------------------------
+        if (analyser) {
             analyser.getByteFrequencyData(dataArray);
             let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i];
-            }
-            let targetVolume = sum / dataArray.length / 255.0; // 归一化声音强度
-            // 使用一阶低通滤波对音频输入做物理平滑过渡，消除毛刺高频
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            let targetVolume = sum / dataArray.length / 255.0;
             micVolume += (targetVolume - micVolume) * 0.25; 
+
+            // 决策核心 1：如果在聆听状态，且说话声低于阈值，开始积累静音时长
+            if (currentState === 'LISTENING') {
+                if (micVolume < SILENCE_THRESHOLD) {
+                    silenceDuration += 0.016; // 每次执行大约16毫秒
+                    if (silenceDuration >= 0.65) { // 连续沉默超过 650 毫秒，自动转入评估
+                        silenceDuration = 0.0;
+                        switchState('EVALUATING');
+                    }
+                } else {
+                    silenceDuration = 0.0; // 一旦有声音，静音计时立即归零
+                }
+            }
+
+            // 决策核心 2：如果在黄色评估（倒计时倒数）中，用户突然再次开口抢词
+            if (currentState === 'EVALUATING') {
+                if (micVolume > SPEAKING_THRESHOLD) {
+                    switchState('YIELDING'); // 触发炸开的让步动画！
+                }
+            }
+
+            // 决策核心 3：如果在让步爆发状态，保持一定时间释放能量，随后自动回到聆听
+            if (currentState === 'YIELDING') {
+                yieldingDuration += 0.016;
+                if (yieldingDuration >= 0.85) { // 维持 850 毫秒的能量倾泄后复位
+                    yieldingDuration = 0.0;
+                    switchState('LISTENING');
+                }
+            }
         } else {
-            // 在非聆听状态下，快速淡出麦克风噪音带来的视觉扰动
             micVolume += (0.0 - micVolume) * 0.15;
         }
 
         let progress = 0.0;
         if (currentState === 'LISTENING') {
-            targetFreq = 0.4 + micVolume * 0.6; // 声音越大，呼吸基准频率略微跟着加速
+            targetFreq = 0.4 + micVolume * 0.6;
         } else if (currentState === 'YIELDING') {
             targetFreq = 0.3;
         } else if (currentState === 'EVALUATING') {
@@ -411,7 +444,6 @@
                 c_x = 4.2;
             }
 
-            // 在聆听状态下，声音的大小可以轻微整体正向撑大弹簧模型 (膨胀效果)
             let dynamicTargetX = targetX;
             if (currentState === 'LISTENING') {
                 dynamicTargetX += micVolume * 0.25;
@@ -515,9 +547,8 @@
         if (currentState === 'EVALUATING') {
             targetBreathAmp = 0.15;
         } else if (currentState === 'YIELDING') {
-            targetBreathAmp = 0.3 * Math.max(0, 1.0 - evalTime);
+            targetBreathAmp = 0.3 * Math.max(0, 1.0 - yieldingDuration);
         } else if (currentState === 'LISTENING') {
-            // 聆听时，根据音量大小，动态扩大呼吸幅度
             targetBreathAmp = 0.05 + micVolume * 0.15;
         }
         
@@ -536,24 +567,20 @@
         const b = Math.round(currentRGB_norm.b * 255);
         const colorStr = `rgb(${r}, ${g}, ${b})`;
 
-        // =========================================================================================
-        // 🚀 核心大招：改写渲染，通过120个多项式边际顶点绘制“液态波纹起伏”
-        // =========================================================================================
         ctx.shadowBlur = 40 * x * breath;
         ctx.shadowColor = colorStr;
         ctx.fillStyle = colorStr;
         
         ctx.beginPath();
-        const NUM_VERTICES = 120; // 120个顶点闭合曲线，兼顾顺滑与计算效率
+        const NUM_VERTICES = 120;
         for (let i = 0; i < NUM_VERTICES; i++) {
             let angle = (i / NUM_VERTICES) * Math.PI * 2;
             
-            // 复合叠加波：在聆听状态下，结合声音能量、相位和特定角度频率，揉捏出液体水滴震荡感
             let dynamicWave = 0;
             if (currentState === 'LISTENING' && micVolume > 0.02) {
                 let wave1 = Math.sin(angle * 5 + phase * 2.5) * 12.0 * micVolume;
                 let wave2 = Math.cos(angle * 3 - phase * 1.2) * 6.0 * micVolume;
-                let wave3 = Math.sin(angle * 8 + phase * 4.0) * 3.0 * micVolume; // 高频次波增加质感
+                let wave3 = Math.sin(angle * 8 + phase * 4.0) * 3.0 * micVolume;
                 dynamicWave = wave1 + wave2 + wave3;
             }
             
@@ -568,14 +595,13 @@
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // 绘制半透明外晕层
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.3)`;
         ctx.beginPath();
         for (let i = 0; i < NUM_VERTICES; i++) {
             let angle = (i / NUM_VERTICES) * Math.PI * 2;
             let dynamicWave = 0;
             if (currentState === 'LISTENING' && micVolume > 0.02) {
-                dynamicWave = Math.sin(angle * 5 + phase * 2.5) * 15.0 * micVolume; // 外圈波纹稍微放大
+                dynamicWave = Math.sin(angle * 5 + phase * 2.5) * 15.0 * micVolume;
             }
             let currentRadius = (renderRadius * 1.12) + dynamicWave;
             let px = cx + Math.cos(angle) * currentRadius;
@@ -586,7 +612,6 @@
         ctx.closePath();
         ctx.fill();
         
-        // 2. 漩涡粒子受声波震荡控制
         let noiseIntensity = 1.0;
         if (currentState === 'EVALUATING') {
             noiseIntensity = 1.0 + Math.pow(progress, 1.4) * 1.5;
@@ -595,7 +620,6 @@
         } else if (currentState === 'YIELDING') {
             noiseIntensity = 2.5 * Math.max(0, 1.0 - x);
         } else if (currentState === 'LISTENING') {
-            // 说话声音越大，粒子受到“声能辐射”从而发生越强烈的无序扰动
             noiseIntensity = 1.0 + micVolume * 3.0;
         }
 
@@ -621,9 +645,8 @@
         if (currentState === 'EVALUATING') {
             targetShrink = Math.pow(progress, 1.4) * 0.32;
         } else if (currentState === 'YIELDING') {
-            targetShrink = -0.35 * Math.max(0, 1.0 - evalTime);
+            targetShrink = -0.35 * Math.max(0, 1.0 - yieldingDuration);
         } else if (currentState === 'LISTENING') {
-            // 声音能量转化为离心力，大声说话时粒子会轻微向外扩散扩展（Shrink 为负）
             targetShrink = -micVolume * 0.15;
         }
 
@@ -646,7 +669,6 @@
             ctx.fill();
         });
 
-        // 5. 更新 Debug 参数面板显示
         const dbgDamping = document.getElementById('dbgDamping');
         const dbgFreq = document.getElementById('dbgFreq');
         const dbgTimer = document.getElementById('dbgTimer');
@@ -664,8 +686,14 @@
                 dbgTimer.innerText = "💥 抢词爆发让步";
                 dbgTimer.style.color = "#66fcf1";
             } else if (currentState === 'LISTENING' && analyser) {
-                dbgTimer.innerText = `🎙️ 声音输入: ${(micVolume * 100).toFixed(0)}%`;
-                dbgTimer.style.color = "var(--primary-color)";
+                if (micVolume > SILENCE_THRESHOLD) {
+                    dbgTimer.innerText = `🎙️ 正在说话: ${(micVolume * 100).toFixed(0)}%`;
+                    dbgTimer.style.color = "var(--primary-color)";
+                } else {
+                    let vState = ((0.65 - silenceDuration)).toFixed(2);
+                    dbgTimer.innerText = `⏳ 停顿静默判定: ${vState}s`;
+                    dbgTimer.style.color = "#8892b0";
+                }
             } else {
                 dbgTimer.innerText = "就绪";
                 dbgTimer.style.color = "#8892b0";
@@ -688,4 +716,4 @@
 </script>
 
 </body>
-</html>
+    </html>
